@@ -16,7 +16,7 @@ import {
 } from "./dates.js";
 import { PEOPLE, assigneesOf, assigneeLabel, inkOn, effEnd } from "./constants.js";
 import { safeLS } from "./api.js";
-import { cascade, closureDays } from "./logic.js";
+import { cascade, closureDays, closuresFor } from "./logic.js";
 
 const ROW_H = { project: 40, task: 34, add: 30 };
 const HEADER_H = 52;
@@ -54,7 +54,7 @@ export function Avatars({ assignee, size = 18 }) {
 }
 
 const Gantt = forwardRef(function Gantt(
-  { projects, tasks, allTasks, closures = [], collapsed, colorMode, selected, onSelect, onToggleCollapse,
+  { projects, tasks, allTasks, closures = [], whoFilter = "all", collapsed, colorMode, selected, onSelect, onToggleCollapse,
     onPatchTask, onPatchTasks, onCreateTask, onQuickAdd, onDragState, onBackgroundClick,
     onMoveProject, onOpenProject },
   ref,
@@ -447,11 +447,12 @@ const Gantt = forwardRef(function Gantt(
   const datesOf = (t) => previewMap.get(t.id) || { start: toDay(t.start), end: toDay(t.end) };
 
   // Morceaux de fermeture qui « coupent » un intervalle [s, e] (px relatifs).
-  const cutsOf = (s, e) => cds
+  const cutsOf = (s, e, t) => closuresFor(cds, t)
     .filter((c) => c.b >= s && c.a <= e)
     .map((c) => {
       const a = Math.max(c.a, s), b = Math.min(c.b, e);
-      return <span key={c.id} className="cut" style={{ left: (a - s) * dayW, width: (b - a + 1) * dayW }} title={c.label || "Fermeture"} />;
+      return <span key={c.id} className={"cut" + (c.who ? " perso" : "")} style={{ left: (a - s) * dayW, width: (b - a + 1) * dayW }}
+        title={c.who ? `Absence de ${PEOPLE[c.who].name}${c.label ? " — " + c.label : ""}` : c.label || "Fermeture de l'agence"} />;
     });
 
   const renderBar = (t, p) => {
@@ -466,7 +467,7 @@ const Gantt = forwardRef(function Gantt(
       t.validation_days && t.kind !== "milestone" ? `+ ${t.validation_days} j de validation client` : "",
       t.lead_days ? `à caler : ${t.lead_days} j avant` : "",
     ].filter(Boolean).join(" · ");
-    const tip = `${title}\n${fmtShort(s)} → ${fmtShort(e)} · ${e - s + 1} j (${workingDays(s, e, cds)} ouvrés)\n${assigneeLabel(t.assignee)}${extra ? "\n" + extra : ""}${t.note ? "\n\n" + t.note : ""}`;
+    const tip = `${title}\n${fmtShort(s)} → ${fmtShort(e)} · ${e - s + 1} j (${workingDays(s, e, closuresFor(cds, t))} ouvrés)\n${assigneeLabel(t.assignee)}${extra ? "\n" + extra : ""}${t.note ? "\n\n" + t.note : ""}`;
     // « À caler » : pointillé avant la tâche.
     const lead = t.lead_days > 0 && !t.done ? (
       <span className="lead" style={{ left: x - t.lead_days * dayW, width: t.lead_days * dayW, "--bc": style["--bc"] }}
@@ -502,7 +503,7 @@ const Gantt = forwardRef(function Gantt(
       <div className={"bar" + (sel ? " sel" : "") + (t.done ? " done" : "") + (isPrev ? " dragging" : "")}
         style={{ left: x, width: w, ...style }} title={isPrev ? undefined : tip}
         onPointerDown={(ev) => startDrag(ev, { kind: "move", task: t })}>
-        {cutsOf(s, e)}
+        {cutsOf(s, e, t)}
         <span className="grip l" onPointerDown={(ev) => startDrag(ev, { kind: "resize-l", task: t })} />
         {inside && (
           <span className="bar-in">
@@ -556,10 +557,11 @@ const Gantt = forwardRef(function Gantt(
           <div className="g-sidefill" style={{ width: sidebarW }} />
           <div className="g-grid" style={{ left: sidebarW, ...gridStyle }} onPointerDown={onBgDown}>
             {offCols}
-            {cds.filter((c) => c.b >= range.start && c.a < end).map((c) => (
-              <div key={c.id} className="closure-col" style={{ left: xOfDay(c.a), width: (c.b - c.a + 1) * dayW }}
-                title={`${c.label || "Fermeture de l'agence"} : ${fmtShort(c.a)} → ${fmtShort(c.b)}`}>
-                {(c.b - c.a + 1) * dayW > 50 && <span>{c.label || "Fermeture"}</span>}
+            {cds.filter((c) => c.b >= range.start && c.a < end && (whoFilter === "all" || !c.who || c.who === whoFilter)).map((c) => (
+              <div key={c.id} className={"closure-col" + (c.who ? " perso" : "")}
+                style={{ left: xOfDay(c.a), width: (c.b - c.a + 1) * dayW, "--pc": c.who ? PEOPLE[c.who].color : undefined }}
+                title={`${c.who ? "Absence de " + PEOPLE[c.who].name : "Fermeture de l'agence"}${c.label ? " — " + c.label : ""} : ${fmtShort(c.a)} → ${fmtShort(c.b)}`}>
+                {(c.b - c.a + 1) * dayW > 50 && <span>{c.who ? PEOPLE[c.who].initial + " · " : ""}{c.label || (c.who ? "Absent" : "Fermeture")}</span>}
               </div>
             ))}
             {today >= range.start && today < end && <div className="today-line" style={{ left: xOfDay(today) + dayW / 2 }} />}

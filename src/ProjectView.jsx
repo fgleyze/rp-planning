@@ -4,7 +4,7 @@
 import React, { useEffect, useState } from "react";
 import { stageOf, STAGE_LABEL, assigneeLabel } from "./constants.js";
 import { toDay, fmtShort, fmtLong, mondayOf, isoWeek, isOff, parts, MONTHS_SHORT, todayDay } from "./dates.js";
-import { closureDays, inClosure } from "./logic.js";
+import { closureDays, inClosure, closuresFor } from "./logic.js";
 
 // Semaines (lundis) où au moins un jour ouvré est couvert par une tâche.
 function productionWeeks(tasks, cds) {
@@ -12,7 +12,7 @@ function productionWeeks(tasks, cds) {
   for (const t of tasks) {
     if (t.kind === "milestone") continue;
     for (let d = toDay(t.start); d <= toDay(t.end); d++) {
-      if (!isOff(d) && !inClosure(d, cds)) weeks.add(mondayOf(d));
+      if (!isOff(d) && !inClosure(d, closuresFor(cds, t))) weeks.add(mondayOf(d));
     }
   }
   return weeks.size;
@@ -60,7 +60,7 @@ function Timeline({ tasks, color, cds }) {
               <small>{t.kind === "milestone" ? `${fmtShort(s)}${t.time ? " · " + t.time : ""}` : `${fmtShort(s)} → ${fmtShort(e)}`} · {assigneeLabel(t.assignee)}</small>
             </div>
             <div className="pv-track">
-              {cds.filter((c) => c.b >= a && c.a <= b).map((c) => (
+              {closuresFor(cds, t).filter((c) => c.b >= a && c.a <= b).map((c) => (
                 <div key={c.id} className="pv-closure" style={{ left: pct(Math.max(c.a, a)) + "%", width: ((Math.min(c.b, b) - Math.max(c.a, a) + 1) / total) * 100 + "%" }} />
               ))}
               {today >= a && today <= b && <div className="pv-today" style={{ left: pct(today) + "%" }} />}
@@ -163,7 +163,7 @@ export function exportForClient(project, tasks, closures, withNotes) {
     return `<h2>${STAGE_LABEL[k]}</h2><table>${list.map(row).join("")}</table>`;
   };
   const meetings = tasks.filter((t) => t.kind === "milestone");
-  const closuresTxt = cds.filter((c) => tasks.some((t) => toDay(t.end) >= c.a && toDay(t.start) <= c.b));
+  const closuresTxt = cds.filter((c) => !c.who && tasks.some((t) => toDay(t.end) >= c.a && toDay(t.start) <= c.b));
   const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Planning — ${esc(project.name)}</title>
 <style>
   @page { margin: 18mm 16mm; }

@@ -66,6 +66,7 @@ addColumn("tasks", "validation_days", "INTEGER NOT NULL DEFAULT 0"); // traîne 
 addColumn("tasks", "lead_days", "INTEGER NOT NULL DEFAULT 0");       // « à caler » : pointillé avant
 addColumn("tasks", "time", "TEXT NOT NULL DEFAULT ''");              // HH:MM (jalons)
 addColumn("tasks", "after_id", "TEXT NOT NULL DEFAULT ''");          // lien : suit cette tâche
+addColumn("closures", "who", "TEXT NOT NULL DEFAULT ''");            // '' = agence | francois | guillaume
 
 // Palette v2 (couleurs vives, lisibles par un daltonien deutéranope) :
 // on remplace une seule fois les anciennes couleurs par leur équivalent.
@@ -156,7 +157,7 @@ const rowToTask = (r) => ({
   done: !!r.done, position: r.position,
   stage: r.stage, validation_days: r.validation_days, lead_days: r.lead_days, time: r.time, after_id: r.after_id,
 });
-const rowToClosure = (r) => ({ id: r.id, start: r.start_date, end: r.end_date, label: r.label });
+const rowToClosure = (r) => ({ id: r.id, start: r.start_date, end: r.end_date, label: r.label, who: r.who || "" });
 
 export const getRev = () => Number(stmts.rev.get().value);
 
@@ -239,7 +240,8 @@ export const updateTasks = write((list) => {
 
 // ── Fermetures de l'agence (vacances) ─────────────────────────────────────
 function cleanClosure(c) {
-  const out = { start_date: String(c.start), end_date: String(c.end), label: str(c.label, 120) };
+  const out = { start_date: String(c.start), end_date: String(c.end), label: str(c.label, 120), who: String(c.who ?? "") };
+  check(["", "francois", "guillaume"].includes(out.who), "Personne invalide.");
   check(DATE_RE.test(out.start_date) && DATE_RE.test(out.end_date), "Dates invalides.");
   check(out.end_date >= out.start_date, "La fin précède le début.");
   return out;

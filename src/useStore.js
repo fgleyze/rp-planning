@@ -204,7 +204,7 @@ export function useStore({ onAuthError, onError }) {
 
   // ── Fermetures de l'agence ──
   const addClosure = useCallback((c) => {
-    const closure = { id: uid(), label: "", ...c };
+    const closure = { id: uid(), label: "", who: "", ...c };
     setClosures((cs) => [...cs, closure].sort((a, b) => a.start.localeCompare(b.start)));
     send(() => api.createClosure(closure));
   }, [send]);

@@ -124,11 +124,12 @@ const TOOLS = [
         .map((p) => `- ${p.name} : relancer le ${fr(p.followup_date)}${p.followup_date <= today ? " (à faire !)" : ""}${p.note ? " — " + p.note : ""}`);
       const { closures = [] } = store.getState();
       const fermetures = closures.filter((c) => c.end >= today && c.start <= horizon)
-        .map((c) => `- ${c.label || "Fermeture"} : du ${fr(c.start)} au ${fr(c.end)}`);
+        .filter((c) => !personne || !c.who || c.who === personne)
+        .map((c) => `- ${c.who ? "Absence de " + WHO[c.who] : "Fermeture de l'agence"}${c.label ? " (" + c.label + ")" : ""} : du ${fr(c.start)} au ${fr(c.end)}`);
       return [
         `Aujourd'hui : ${fr(today)}. Horizon : jusqu'au ${fr(horizon)}${who}.`,
         ...(relances.length ? ["", "## Relances prospects", ...relances] : []),
-        ...(fermetures.length ? ["", "## Fermetures de l'agence", ...fermetures] : []),
+        ...(fermetures.length ? ["", "## Fermetures et absences", ...fermetures] : []),
         "", "## En retard", ...(late.length ? fmt(late) : ["(rien)"]),
         "", "## En cours", ...(now.length ? fmt(now) : ["(rien)"]),
         "", "## À venir", ...(next.length ? fmt(next) : ["(rien)"]),

@@ -282,7 +282,7 @@ function Planner({ onLogout }) {
         <button className={"btn" + (dueFollowups ? " warn" : "")} onClick={() => setSelected({ type: "followups" })} title="Prospects et relances">
           Relances{dueFollowups > 0 && <span className="badge">{dueFollowups}</span>}
         </button>
-        <button className="btn" onClick={() => setSelected({ type: "closures" })} title="Fermetures de l'agence (vacances)">
+        <button className="btn" onClick={() => setSelected({ type: "closures" })} title="Fermetures de l'agence et absences perso">
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M2 7.5a6 6 0 0 1 12 0zM8 7.5V14M8 14h2.5" /></svg>
           <span className="hide-lg">Fermetures</span>
         </button>
@@ -329,6 +329,7 @@ function Planner({ onLogout }) {
             tasks={visibleTasks}
             allTasks={tasks}
             closures={store.closures}
+            whoFilter={who}
             collapsed={collapsed}
             colorMode={colorMode}
             selected={selected}

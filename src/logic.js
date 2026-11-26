@@ -51,3 +51,13 @@ export const closureDays = (closures) =>
   closures.map((c) => ({ ...c, a: toDay(c.start), b: toDay(c.end) })).sort((x, y) => x.a - y.a);
 
 export const inClosure = (day, cds) => cds.some((c) => day >= c.a && day <= c.b);
+
+// Une fermeture s'applique-t-elle à une tâche ?
+// Agence ('') : toujours. Perso : seulement si toutes les personnes assignées
+// sont absentes (une tâche « les deux » n'est pas coupée par l'absence d'un seul).
+export function appliesTo(c, task) {
+  if (!c.who) return true;
+  const who = task.assignee === "both" ? ["francois", "guillaume"] : task.assignee ? [task.assignee] : [];
+  return who.length > 0 && who.every((w) => w === c.who);
+}
+export const closuresFor = (cds, task) => cds.filter((c) => appliesTo(c, task));

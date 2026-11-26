@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ASSIGNEE_OPTIONS, PEOPLE, PHASES, PROJECT_COLORS, assigneesOf, stageOf, STAGE_LABEL, effEnd } from "./constants.js";
 import { toDay, toIso, fmtShort, fmtLong, workingDays, todayDay } from "./dates.js";
 import { Avatars } from "./Gantt.jsx";
-import { closureDays, wouldLoop } from "./logic.js";
+import { closureDays, closuresFor, wouldLoop } from "./logic.js";
 
 // Lien « Ajouter à Google Agenda » prérempli pour un jalon.
 export function gcalUrl(task, project) {
@@ -93,7 +93,7 @@ function ConfirmButton({ label, confirm, onConfirm }) {
 
 // ── Tâche ────────────────────────────────────────────────────────────────
 export function TaskPanel({ task, tasks = [], closures = [], projects, isNew, onPatch, onDelete, onDuplicate, onClose }) {
-  const cds = closureDays(closures);
+  const cds = closuresFor(closureDays(closures), task);
   const project = projects.find((p) => p.id === task.project_id);
   // Tâches du même projet auxquelles on peut se lier (sans créer de boucle).
   const linkable = tasks
@@ -369,32 +369,64 @@ export function ProjectPanel({ project, tasks, isNew, onPatch, onDelete, onAddTa
   );
 }
 
-// ── Fermetures de l'agence (vacances) ─────────────────────────────────────
+// ── Fermetures de l'agence et absences perso ──────────────────────────────
+const WHO_OPTIONS = [
+  { value: "", label: "Agence" },
+  { value: "francois", label: "François" },
+  { value: "guillaume", label: "Guillaume" },
+];
+function WhoSeg({ value, onChange }) {
+  return (
+    <div className="seg who-seg">
+      {WHO_OPTIONS.map((o) => (
+        <button key={o.value} className={value === o.value ? "on" : ""} onClick={() => onChange(o.value)}
+          title={o.value ? `Absence de ${o.label} seulement` : "Toute l'agence est fermée"}>
+          {o.value ? <Avatars assignee={o.value} size={14} /> : null}{o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function ClosuresPanel({ closures, onAdd, onPatch, onRemove, onClose }) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [label, setLabel] = useState("");
+  const [who, setWho] = useState("");
+  const [filter, setFilter] = useState("all");
   const add = () => {
     if (!start) return;
     const e = end && end >= start ? end : start;
-    onAdd({ start, end: e, label: label.trim() });
+    onAdd({ start, end: e, label: label.trim(), who });
     setStart(""); setEnd(""); setLabel("");
   };
+  const list = closures.filter((c) => filter === "all" || (c.who || "") === filter);
   return (
-    <Shell title="Fermetures de l'agence" onClose={onClose}>
-      <p className="hint">Les semaines de vacances apparaissent hachurées sur tout le planning et « coupent » les barres qui les traversent (elles ne comptent pas dans les jours ouvrés).</p>
+    <Shell title="Fermetures et absences" onClose={onClose}>
+      <p className="hint">
+        <b>Agence</b> : tout le monde est fermé, hachuré sur tout le planning. <b>François</b> ou <b>Guillaume</b> : absence perso,
+        qui ne coupe que ses propres tâches (une tâche « les deux » n'est coupée que si les deux sont absents).
+        Les absences perso n'apparaissent pas dans l'export client.
+      </p>
       <div className="closure-add">
+        <div className="field"><span>Pour qui</span><WhoSeg value={who} onChange={setWho} /></div>
         <div className="field-row">
           <label className="field"><span>Du</span><input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></label>
           <label className="field"><span>Au</span><input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} /></label>
         </div>
-        <label className="field"><span>Libellé</span><input value={label} placeholder="Vacances de Noël, pont…" onChange={(e) => setLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} /></label>
-        <button className="btn primary" disabled={!start} onClick={add}>+ Ajouter la fermeture</button>
+        <label className="field"><span>Libellé</span><input value={label} placeholder={who ? "Congés, formation…" : "Vacances de Noël, pont…"} onChange={(e) => setLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} /></label>
+        <button className="btn primary" disabled={!start} onClick={add}>+ Ajouter {who ? "l'absence" : "la fermeture"}</button>
+      </div>
+      <div className="seg closure-filter">
+        {[{ value: "all", label: "Tout" }, ...WHO_OPTIONS].map((o) => (
+          <button key={o.value} className={filter === o.value ? "on" : ""} onClick={() => setFilter(o.value)}>{o.label}</button>
+        ))}
       </div>
       <div className="closure-list">
-        {closures.length === 0 && <p className="hint">Aucune fermeture pour l'instant.</p>}
-        {closures.map((c) => (
-          <div key={c.id} className="closure-item">
+        {list.length === 0 && <p className="hint">Rien pour l'instant.</p>}
+        {list.map((c) => (
+          <div key={c.id} className={"closure-item" + (c.who ? " perso" : "")} style={c.who ? { "--pc": PEOPLE[c.who].color } : undefined}>
+            <WhoSeg value={c.who || ""} onChange={(v) => onPatch(c.id, { who: v })} />
             <div className="field-row">
               <input type="date" value={c.start} onChange={(e) => e.target.value && onPatch(c.id, { start: e.target.value, end: c.end < e.target.value ? e.target.value : c.end })} />
               <input type="date" value={c.end} min={c.start} onChange={(e) => e.target.value && onPatch(c.id, { end: e.target.value })} />
