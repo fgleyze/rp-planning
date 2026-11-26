@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import * as store from "./db.js";
+import { mountMcp } from "./mcp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -80,6 +81,9 @@ app.patch("/api/tasks/:id", handle((req) => store.updateTask(req.params.id, req.
 app.delete("/api/tasks/:id", handle((req) => store.deleteTask(req.params.id)));
 
 app.use("/api", (req, res) => res.status(404).json({ error: "Route inconnue." }));
+
+// ── Connecteur MCP pour Claude (lecture seule, voir server/mcp.js) ─────────
+mountMcp(app);
 
 // ── Front (prod) ─────────────────────────────────────────────────────────
 if (PROD) {

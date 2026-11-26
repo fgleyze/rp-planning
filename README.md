@@ -35,6 +35,17 @@ projets, phases (APS, APD, PC…), qui fait quoi, petites notes.
 « Couleurs : Projets / Personnes » bascule la couleur des barres. « Qui » filtre
 sur François ou Guillaume (les nouvelles tâches leur sont alors assignées).
 
+## Claude (connecteur MCP, lecture seule)
+
+`server/mcp.js` expose le planning à Claude : `https://planning.racines-perspectives.fr/mcp/<MCP_KEY>`
+(clé dans `.env`, ne pas la diffuser ; la changer = régénérer `MCP_KEY` puis `pm2 restart rp-planning`
+et remettre l'adresse dans les connecteurs).
+
+Chacun (François, Guillaume) l'ajoute une fois sur claude.ai : **Réglages › Connecteurs ›
+Ajouter un connecteur personnalisé**, nom « R&P Planning », URL ci-dessus. Il est alors disponible
+dans l'appli, sur mobile et dans Claude Code. Outils : `planning_a_venir`, `planning_projets`,
+`planning_charge`.
+
 ## Dev
 
 ```bash
