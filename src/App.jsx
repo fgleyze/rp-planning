@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api, getToken, setToken, clearToken, safeLS } from "./api.js";
 import { useStore } from "./useStore.js";
 import Gantt, { Avatars } from "./Gantt.jsx";
-import { TaskPanel, ProjectPanel } from "./Panel.jsx";
+import { TaskPanel, ProjectPanel, ClosuresPanel, FollowupsPanel } from "./Panel.jsx";
+import ProjectView from "./ProjectView.jsx";
+import { cascade } from "./logic.js";
 import { PEOPLE, PROJECT_COLORS, assigneesOf } from "./constants.js";
 import { toDay, toIso, todayDay } from "./dates.js";
 
@@ -91,14 +93,36 @@ function Planner({ onLogout }) {
   const [who, setWho] = usePref("who", "all");
   const [showArchived, setShowArchived] = usePref("archived", false);
   const [collapsedArr, setCollapsedArr] = usePref("collapsed", []);
+  const [showProspects, setShowProspects] = usePref("prospects", true);
+  const [order, setOrder] = usePref("projectOrder", []); // ordre propre à ce navigateur
+  const [theme, setTheme] = usePref("theme", "auto"); // auto | light | dark
+  const [viewId, setViewId] = useState(null); // vue détail d'un projet
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "auto") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", theme);
+  }, [theme]);
   const collapsed = useMemo(() => new Set(collapsedArr), [collapsedArr]);
   const [selected, setSelected] = useState(null); // { type, id, isNew? }
   const gantt = useRef(null);
 
+  // Ordre : d'abord l'ordre local (ce navigateur), puis l'ordre commun pour
+  // les projets que ce navigateur n'a pas encore rangés.
+  const sortedProjects = useMemo(() => {
+    const idx = new Map(order.map((id, i) => [id, i]));
+    return [...projects].sort((a, b) => {
+      const ia = idx.get(a.id), ib = idx.get(b.id);
+      if (ia != null && ib != null) return ia - ib;
+      if (ia != null) return -1;
+      if (ib != null) return 1;
+      return a.position - b.position;
+    });
+  }, [projects, order]);
   const visibleProjects = useMemo(
-    () => projects.filter((p) => showArchived || !p.archived).sort((a, b) => a.position - b.position),
-    [projects, showArchived],
+    () => sortedProjects.filter((p) => (showArchived || !p.archived) && (showProspects || p.status !== "prospect")),
+    [sortedProjects, showArchived, showProspects],
   );
+  const dueFollowups = projects.filter((p) => p.status === "prospect" && !p.archived && p.followup_date && toDay(p.followup_date) <= todayDay()).length;
   const visibleTasks = useMemo(
     () => (who === "all" ? tasks : tasks.filter((t) => assigneesOf(t.assignee).includes(who))),
     [tasks, who],
@@ -106,7 +130,7 @@ function Planner({ onLogout }) {
 
   // La sélection disparaît si l'objet a été supprimé (par l'autre, par ex.).
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || selected.type === "closures" || selected.type === "followups") return;
     const list = selected.type === "task" ? tasks : projects;
     if (loaded && !list.some((x) => x.id === selected.id)) setSelected(null);
   }, [tasks, projects, selected, loaded]);
@@ -145,16 +169,24 @@ function Planner({ onLogout }) {
     setSelected({ type: "project", id: p.id, isNew: true });
   };
 
+  // Monter / descendre un projet : ordre enregistré dans ce navigateur seulement.
   const moveProject = (id, dir) => {
-    const list = visibleProjects;
-    const i = list.findIndex((p) => p.id === id);
-    const j = i + dir;
-    if (j < 0 || j >= list.length) return;
-    // Échange des positions (en les rendant distinctes au besoin).
-    const a = list[i], b = list[j];
-    const pa = a.position === b.position ? b.position + dir * 0.5 : b.position;
-    store.patchProject(a.id, { position: pa });
-    store.patchProject(b.id, { position: a.position });
+    const vis = visibleProjects.map((p) => p.id);
+    const i = vis.indexOf(id), j = i + dir;
+    if (i < 0 || j < 0 || j >= vis.length) return;
+    const full = sortedProjects.map((p) => p.id);
+    const a = full.indexOf(vis[i]), b = full.indexOf(vis[j]);
+    [full[a], full[b]] = [full[b], full[a]];
+    setOrder(full);
+  };
+
+  // Modifier une tâche en décalant celles qui la suivent (liens explicites).
+  const patchTask = (id, patch) => {
+    const ups = cascade(tasks, id, patch);
+    if (ups.length > 1) {
+      store.patchTasks(ups, "Décalage en cascade");
+      showToast(`${ups.length - 1} tâche${ups.length > 2 ? "s" : ""} liée${ups.length > 2 ? "s" : ""} décalée${ups.length > 2 ? "s" : ""}`, { label: "Annuler", run: undo });
+    } else store.patchTask(id, patch);
   };
 
   const undo = useCallback(() => {
@@ -176,6 +208,15 @@ function Planner({ onLogout }) {
         e.preventDefault();
         undo();
       } else if (e.key === "Escape") {
+        // Barre créée par erreur (encore vide) : Échap la supprime sans confirmation.
+        const sel = selected?.type === "task" && selected.isNew ? tasks.find((t) => t.id === selected.id) : null;
+        const typed = typing && document.activeElement.value;
+        if (sel && !sel.title && !sel.note && !typed) {
+          if (typing) document.activeElement.blur();
+          store.removeTask(sel.id);
+          setSelected(null);
+          return;
+        }
         if (typing) document.activeElement.blur();
         else setSelected(null);
       } else if (!typing && !e.ctrlKey && !e.metaKey) {
@@ -191,9 +232,11 @@ function Planner({ onLogout }) {
 
   const selTask = selected?.type === "task" ? tasks.find((t) => t.id === selected.id) : null;
   const selProject = selected?.type === "project" ? projects.find((p) => p.id === selected.id) : null;
+  const viewProject = viewId ? projects.find((p) => p.id === viewId) : null;
+  const panelOpen = selTask || selProject || selected?.type === "closures" || selected?.type === "followups";
 
   return (
-    <div className={"app" + (selTask || selProject ? " has-panel" : "")}>
+    <div className={"app" + (panelOpen ? " has-panel" : "")}>
       <header className="toolbar">
         <Logo />
         <span className="app-name">Planning</span>
@@ -227,13 +270,34 @@ function Planner({ onLogout }) {
         </div>
 
         <label className="check tb-check">
+          <input type="checkbox" checked={showProspects} onChange={(e) => setShowProspects(e.target.checked)} />
+          <span>Prospects</span>
+        </label>
+        <label className="check tb-check">
           <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           <span>Archivés</span>
         </label>
 
         <div className="tb-spacer" />
+        <button className={"btn" + (dueFollowups ? " warn" : "")} onClick={() => setSelected({ type: "followups" })} title="Prospects et relances">
+          Relances{dueFollowups > 0 && <span className="badge">{dueFollowups}</span>}
+        </button>
+        <button className="btn" onClick={() => setSelected({ type: "closures" })} title="Fermetures de l'agence (vacances)">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M2 7.5a6 6 0 0 1 12 0zM8 7.5V14M8 14h2.5" /></svg>
+          <span className="hide-lg">Fermetures</span>
+        </button>
+        <button className="icon-btn" title={`Thème : ${{ auto: "automatique", light: "clair", dark: "sombre" }[theme]} (cliquer pour changer)`}
+          onClick={() => setTheme({ auto: "light", light: "dark", dark: "auto" }[theme])}>
+          {theme === "dark" ? (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" strokeLinejoin="round" /></svg>
+          ) : theme === "light" ? (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="3" /><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1" /></svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" /></svg>
+          )}
+        </button>
         <SyncDot state={store.sync} />
-        <button className="btn ghost" onClick={undo} disabled={!store.canUndo} title="Annuler (Ctrl+Z)">↶<span className="hide-md"> Annuler</span></button>
+        <button className="btn ghost" onClick={undo} disabled={!store.canUndo} title="Annuler (Ctrl+Z)">↶<span className="hide-lg"> Annuler</span></button>
         <button className="btn primary" onClick={addProject}>+ Projet</button>
         <button className="icon-btn" onClick={onLogout} title="Se déconnecter">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3H3.5v10H6M10 5l3 3-3 3M13 8H6" /></svg>
@@ -263,12 +327,18 @@ function Planner({ onLogout }) {
             ref={gantt}
             projects={visibleProjects}
             tasks={visibleTasks}
+            allTasks={tasks}
+            closures={store.closures}
             collapsed={collapsed}
             colorMode={colorMode}
             selected={selected}
             onSelect={setSelected}
             onToggleCollapse={toggleCollapse}
-            onPatchTask={(id, patch) => store.patchTask(id, patch)}
+            onPatchTask={patchTask}
+            onPatchTasks={(ups, label) => { store.patchTasks(ups, label); showToast(label, { label: "Annuler", run: undo }); }}
+            onBackgroundClick={() => setSelected(null)}
+            onMoveProject={moveProject}
+            onOpenProject={(id) => setViewId(id)}
             onCreateTask={createTask}
             onQuickAdd={quickAdd}
             onDragState={store.setPaused}
@@ -279,9 +349,11 @@ function Planner({ onLogout }) {
           <TaskPanel
             key={selTask.id}
             task={selTask}
-            projects={projects}
+            tasks={tasks}
+            closures={store.closures}
+            projects={sortedProjects}
             isNew={!!selected.isNew}
-            onPatch={(patch) => store.patchTask(selTask.id, patch)}
+            onPatch={(patch) => patchTask(selTask.id, patch)}
             onDelete={() => deleteTask(selTask.id)}
             onDuplicate={() => {
               const d = toDay(selTask.end) - toDay(selTask.start) + 1;
@@ -313,10 +385,23 @@ function Planner({ onLogout }) {
             }}
             onAddTask={() => quickAdd(selProject.id)}
             onMove={(dir) => moveProject(selProject.id, dir)}
+            onOpenView={() => setViewId(selProject.id)}
             onClose={() => setSelected(null)}
           />
         )}
+        {selected?.type === "closures" && (
+          <ClosuresPanel closures={store.closures} onAdd={store.addClosure} onPatch={store.patchClosure}
+            onRemove={store.removeClosure} onClose={() => setSelected(null)} />
+        )}
+        {selected?.type === "followups" && (
+          <FollowupsPanel projects={projects} onOpen={(id) => setSelected({ type: "project", id })}
+            onPatch={(id, patch) => store.patchProject(id, patch)} onClose={() => setSelected(null)} />
+        )}
       </main>
+
+      {viewProject && (
+        <ProjectView project={viewProject} tasks={tasks} closures={store.closures} onClose={() => setViewId(null)} />
+      )}
 
       {toast && (
         <div className="toast" key={toast.id}>
@@ -334,7 +419,7 @@ function SyncDot({ state }) {
   const label = { ok: "Enregistré", saving: "Enregistrement…", offline: "Hors ligne" }[state];
   return (
     <span className={"sync " + state} title={label}>
-      <i /> <span className="hide-sm">{label}</span>
+      <i /> <span className="hide-sm hide-lg">{label}</span>
     </span>
   );
 }

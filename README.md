@@ -9,7 +9,8 @@ projets, phases (APS, APD, PC…), qui fait quoi, petites notes.
 
 - **Express** (`server/index.js`) sert l'API `/api` et, en prod, le front compilé (`dist/`).
 - **SQLite** (`better-sqlite3`, `server/db.js`) : un seul fichier `data/planning.db`,
-  deux tables (`projects`, `tasks`) + un compteur `rev` incrémenté à chaque écriture.
+  tables `projects`, `tasks`, `closures` + un compteur `rev` incrémenté à chaque écriture.
+  Les évolutions de schéma se font uniquement par ajout de colonnes (`addColumn` dans `db.js`).
   Sauvegarde quotidienne automatique dans `data/backups/` (30 jours gardés).
 - **React + Vite** (`src/`) : mises à jour optimistes, écritures envoyées en file,
   polling toutes les 4 s (`/api/state?rev=N`, réponse vide si rien n'a changé)
@@ -32,7 +33,24 @@ projets, phases (APS, APD, PC…), qui fait quoi, petites notes.
 | Ctrl/⌘ + Z | annuler |
 | Suppr | supprimer la tâche sélectionnée |
 
-« Couleurs : Projets / Personnes » bascule la couleur des barres. « Qui » filtre
+| Glisser la barre fine d'un projet | décaler tout le projet d'un coup |
+| ▲ ▼ au survol d'un projet | changer l'ordre (propre à ce navigateur) |
+| Icône ↗ d'un projet / « Vue détail » | vue études / chantier, semaines de production, export client (PDF) |
+| Clic sur le fond | fermer le panneau |
+| Échap sur une tâche juste créée et vide | la supprimer |
+
+Dans le panneau d'une tâche : **Suit la tâche** (lien : quand la précédente glisse, celle-ci et
+toutes ses suivantes se décalent d'autant), **Validation client** (traîne hachurée après la tâche),
+**À caler** (pointillé avant la tâche), **Phase** études / chantier (déduite de l'intitulé par
+défaut), et pour un jalon : **Heure** + bouton **Ajouter à Google Agenda**.
+
+Un projet peut avoir le statut **Prospect** (proposition envoyée le…, relancer le…) : il apparaît
+en pointillé, et le bouton **Relances** de la barre d'outils liste les prospects (pastille = relances
+dues). **Fermetures** : vacances de l'agence, hachurées sur tout le planning, elles « coupent » les
+barres et ne comptent pas dans les jours ouvrés. Thème clair / sombre / automatique : icône ◐.
+
+« Couleurs : Projets / Personnes » bascule la couleur des barres (palette lisible pour un daltonien
+deutéranope). « Qui » filtre
 sur François ou Guillaume (les nouvelles tâches leur sont alors assignées).
 
 ## Claude (connecteur MCP, lecture seule)

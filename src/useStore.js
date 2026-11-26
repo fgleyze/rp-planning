@@ -13,6 +13,7 @@ export const uid = () =>
 export function useStore({ onAuthError, onError }) {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [closures, setClosures] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [sync, setSync] = useState("ok"); // ok | saving | offline
   const [canUndo, setCanUndo] = useState(false);
@@ -47,6 +48,7 @@ export function useStore({ onAuthError, onError }) {
       rev.current = s.rev;
       setProjects(s.projects);
       setTasks(s.tasks);
+      setClosures(s.closures || []);
       setLoaded(true);
     } catch (e) {
       if (e instanceof AuthError) return fail(e);
@@ -103,7 +105,7 @@ export function useStore({ onAuthError, onError }) {
 
   // ── Projets ──
   const addProject = useCallback((p) => {
-    const project = { id: uid(), archived: false, ...p };
+    const project = { id: uid(), archived: false, status: "signed", proposal_date: "", followup_date: "", note: "", ...p };
     setProjects((ps) => [...ps, project]);
     send(() => api.createProject(project));
     return project;
@@ -130,7 +132,10 @@ export function useStore({ onAuthError, onError }) {
 
   // ── Tâches ──
   const addTask = useCallback((t, { undo = true } = {}) => {
-    const task = { id: uid(), title: "", note: "", assignee: "", kind: "task", done: false, ...t };
+    const task = {
+      id: uid(), title: "", note: "", assignee: "", kind: "task", done: false,
+      stage: "", validation_days: 0, lead_days: 0, time: "", after_id: "", ...t,
+    };
     setTasks((ts) => [...ts, task]);
     send(() => api.createTask(task));
     if (undo) pushUndo("Tâche créée", () => removeTaskRaw(task.id));
@@ -170,6 +175,48 @@ export function useStore({ onAuthError, onError }) {
     });
   }, [send]);
 
+  // Plusieurs tâches d'un coup, une seule entrée d'annulation.
+  // updates : [{ id, patch }]
+  const patchTasks = useCallback((updates, label = "Décalage") => {
+    const cur = tasksRef.current;
+    const prev = [];
+    const real = [];
+    for (const { id, patch } of updates) {
+      const before = cur.find((t) => t.id === id);
+      if (!before) continue;
+      const changed = Object.keys(patch).filter((k) => patch[k] !== before[k]);
+      if (!changed.length) continue;
+      real.push({ id, patch });
+      prev.push({ id, patch: Object.fromEntries(changed.map((k) => [k, before[k]])) });
+    }
+    if (!real.length) return;
+    const apply = (list) => {
+      const m = new Map(list.map((u) => [u.id, u.patch]));
+      setTasks((ts) => ts.map((t) => (m.has(t.id) ? { ...t, ...m.get(t.id) } : t)));
+      send(() => api.updateTasks(list));
+    };
+    apply(real);
+    pushUndo(label, () => {
+      const alive = prev.filter((u) => tasksRef.current.some((t) => t.id === u.id));
+      if (alive.length) apply(alive);
+    });
+  }, [send]);
+
+  // ── Fermetures de l'agence ──
+  const addClosure = useCallback((c) => {
+    const closure = { id: uid(), label: "", ...c };
+    setClosures((cs) => [...cs, closure].sort((a, b) => a.start.localeCompare(b.start)));
+    send(() => api.createClosure(closure));
+  }, [send]);
+  const patchClosure = useCallback((id, patch) => {
+    setClosures((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    send(() => api.updateClosure(id, patch));
+  }, [send]);
+  const removeClosure = useCallback((id) => {
+    setClosures((cs) => cs.filter((c) => c.id !== id));
+    send(() => api.deleteClosure(id));
+  }, [send]);
+
   const undo = useCallback(() => {
     const item = undoStack.current.pop();
     setCanUndo(undoStack.current.length > 0);
@@ -182,9 +229,10 @@ export function useStore({ onAuthError, onError }) {
   const setPaused = useCallback((v) => { paused.current = v; }, []);
 
   return {
-    projects, tasks, loaded, sync, canUndo,
+    projects, tasks, closures, loaded, sync, canUndo,
     addProject, patchProject, removeProject,
-    addTask, patchTask, removeTask,
+    addTask, patchTask, patchTasks, removeTask,
+    addClosure, patchClosure, removeClosure,
     undo, lastUndoLabel, setPaused, reload: () => load(false),
   };
 }

@@ -14,8 +14,9 @@ import {
   toDay, toIso, todayDay, parts, mondayOf, isOff, holiday, isoWeek,
   MONTHS, MONTHS_SHORT, WEEKDAYS, fmtShort, fmtLong, workingDays,
 } from "./dates.js";
-import { PEOPLE, assigneesOf, assigneeLabel, inkOn } from "./constants.js";
+import { PEOPLE, assigneesOf, assigneeLabel, inkOn, effEnd } from "./constants.js";
 import { safeLS } from "./api.js";
+import { cascade, closureDays } from "./logic.js";
 
 const ROW_H = { project: 40, task: 34, add: 30 };
 const HEADER_H = 52;
@@ -29,13 +30,13 @@ function barStyle(task, project, colorMode) {
   if (colorMode === "person") {
     if (task.assignee === "both") {
       const a = PEOPLE.francois.color, b = PEOPLE.guillaume.color;
-      return { background: `repeating-linear-gradient(135deg, ${a} 0 8px, ${b} 8px 16px)`, color: "#fff", textShadow: "0 0 3px #000, 0 0 1px #000" };
+      return { background: `repeating-linear-gradient(135deg, ${a} 0 8px, ${b} 8px 16px)`, color: "#fff", textShadow: "0 0 3px #000, 0 0 1px #000", "--bc": a };
     }
     const p = PEOPLE[task.assignee];
     const bg = p ? p.color : "#9a9a92";
-    return { background: bg, color: inkOn(bg) };
+    return { background: bg, color: inkOn(bg), "--bc": bg };
   }
-  return { background: project.color, color: inkOn(project.color) };
+  return { background: project.color, color: inkOn(project.color), "--bc": project.color };
 }
 
 export function Avatars({ assignee, size = 18 }) {
@@ -53,8 +54,9 @@ export function Avatars({ assignee, size = 18 }) {
 }
 
 const Gantt = forwardRef(function Gantt(
-  { projects, tasks, collapsed, colorMode, selected, onSelect, onToggleCollapse,
-    onPatchTask, onCreateTask, onQuickAdd, onDragState },
+  { projects, tasks, allTasks, closures = [], collapsed, colorMode, selected, onSelect, onToggleCollapse,
+    onPatchTask, onPatchTasks, onCreateTask, onQuickAdd, onDragState, onBackgroundClick,
+    onMoveProject, onOpenProject },
   ref,
 ) {
   const scroller = useRef(null);
@@ -92,6 +94,7 @@ const Gantt = forwardRef(function Gantt(
   });
 
   const xOfDay = (day) => (day - range.start) * dayW;
+  const cds = useMemo(() => closureDays(closures), [closures]);
 
   // Jour (fractionnaire) sous un clientX.
   const dayAt = useCallback((clientX) => {
@@ -284,6 +287,7 @@ const Gantt = forwardRef(function Gantt(
       return { start: Math.min(a, b), end: Math.max(a, b) };
     }
     const delta = Math.round(cur - d.day0);
+    if (d.kind === "move-project") return { delta };
     const s0 = toDay(d.task.start), e0 = toDay(d.task.end);
     if (d.kind === "move") return { start: s0 + delta, end: e0 + delta };
     if (d.kind === "resize-l") return { start: Math.min(s0 + delta, e0), end: e0 };
@@ -292,7 +296,17 @@ const Gantt = forwardRef(function Gantt(
   }
 
   function finishDrag(d, res) {
-    if (d.kind === "pan") return;
+    if (d.kind === "pan") { if (!d.moved) onBackgroundClick?.(); return; }
+    if (d.kind === "move-project") {
+      if (!d.moved) return onSelect({ type: "project", id: d.project.id });
+      if (!res.delta) return;
+      const its = (allTasks || tasks).filter((t) => t.project_id === d.project.id);
+      onPatchTasks?.(its.map((t) => ({
+        id: t.id,
+        patch: { start: toIso(toDay(t.start) + res.delta), end: toIso(toDay(t.end) + res.delta) },
+      })), `Projet « ${d.project.name} » décalé`);
+      return;
+    }
     if (d.kind === "create") {
       // Simple clic sur la ligne « + » : une tâche d'une semaine.
       const start = d.moved ? res.start : Math.floor(d.day0);
@@ -414,35 +428,81 @@ const Gantt = forwardRef(function Gantt(
     backgroundSize: dayW >= 14 ? `${dayW}px 100%, ${dayW * 7}px 100%` : `${dayW * 7}px 100%`,
   };
 
-  const preview = drag && drag.kind !== "reorder" && drag.kind !== "pan" ? drag : null;
+  const preview = drag && drag.kind !== "reorder" && drag.kind !== "pan" && drag.kind !== "create" ? drag : null;
+  // Aperçu des dates pendant un glisser : tâche + ses suivantes, ou projet entier.
+  const previewMap = useMemo(() => {
+    const m = new Map();
+    if (!preview || !preview.moved && preview.kind !== "move-project") return m;
+    if (preview.kind === "move-project") {
+      if (!preview.delta) return m;
+      for (const t of allTasks || tasks) if (t.project_id === preview.project.id)
+        m.set(t.id, { start: toDay(t.start) + preview.delta, end: toDay(t.end) + preview.delta });
+      return m;
+    }
+    const patch = { start: toIso(preview.start), end: toIso(preview.end) };
+    for (const u of cascade(allTasks || tasks, preview.task.id, patch))
+      m.set(u.id, { start: toDay(u.patch.start), end: toDay(u.patch.end) });
+    return m;
+  }, [preview?.kind, preview?.start, preview?.end, preview?.delta, preview?.moved, tasks, allTasks]);
+  const datesOf = (t) => previewMap.get(t.id) || { start: toDay(t.start), end: toDay(t.end) };
+
+  // Morceaux de fermeture qui « coupent » un intervalle [s, e] (px relatifs).
+  const cutsOf = (s, e) => cds
+    .filter((c) => c.b >= s && c.a <= e)
+    .map((c) => {
+      const a = Math.max(c.a, s), b = Math.min(c.b, e);
+      return <span key={c.id} className="cut" style={{ left: (a - s) * dayW, width: (b - a + 1) * dayW }} title={c.label || "Fermeture"} />;
+    });
 
   const renderBar = (t, p) => {
-    const isPrev = preview && preview.task?.id === t.id;
-    const s = isPrev ? preview.start : toDay(t.start);
-    const e = isPrev ? preview.end : toDay(t.end);
+    const isPrev = previewMap.has(t.id);
+    const { start: s, end: e } = datesOf(t);
     const x = xOfDay(s), w = (e - s + 1) * dayW;
     const sel = selected?.type === "task" && selected.id === t.id;
     const style = barStyle(t, p, colorMode);
     const title = t.title || "Sans titre";
-    const tip = `${title}\n${fmtShort(s)} → ${fmtShort(e)} · ${e - s + 1} j (${workingDays(s, e)} ouvrés)\n${assigneeLabel(t.assignee)}${t.note ? "\n\n" + t.note : ""}`;
+    const extra = [
+      t.time && t.kind === "milestone" ? `à ${t.time}` : "",
+      t.validation_days && t.kind !== "milestone" ? `+ ${t.validation_days} j de validation client` : "",
+      t.lead_days ? `à caler : ${t.lead_days} j avant` : "",
+    ].filter(Boolean).join(" · ");
+    const tip = `${title}\n${fmtShort(s)} → ${fmtShort(e)} · ${e - s + 1} j (${workingDays(s, e, cds)} ouvrés)\n${assigneeLabel(t.assignee)}${extra ? "\n" + extra : ""}${t.note ? "\n\n" + t.note : ""}`;
+    // « À caler » : pointillé avant la tâche.
+    const lead = t.lead_days > 0 && !t.done ? (
+      <span className="lead" style={{ left: x - t.lead_days * dayW, width: t.lead_days * dayW, "--bc": style["--bc"] }}
+        title={`À caler dès que possible (${t.lead_days} j avant)`}><i>à caler</i></span>
+    ) : null;
 
     if (t.kind === "milestone") {
       const size = 18;
       return (
-        <div className={"milestone" + (sel ? " sel" : "") + (t.done ? " done" : "") + (isPrev ? " dragging" : "")}
-          style={{ left: x + dayW / 2 - size / 2 }} title={tip}
-          onPointerDown={(ev) => startDrag(ev, { kind: "move", task: t })}>
-          <span className="diamond" style={{ background: style.background }} />
-          <span className="ms-label">{t.done && "✓ "}{title}<Avatars assignee={t.assignee} size={15} /></span>
-        </div>
+        <>
+          {lead}
+          <div className={"milestone" + (sel ? " sel" : "") + (t.done ? " done" : "") + (isPrev ? " dragging" : "")}
+            style={{ left: x + dayW / 2 - size / 2 }} title={tip}
+            onPointerDown={(ev) => startDrag(ev, { kind: "move", task: t })}>
+            <span className="diamond" style={{ background: style.background }} />
+            <span className="ms-label">{t.done && "✓ "}{title}{t.time && <small className="ms-time">{t.time}</small>}<Avatars assignee={t.assignee} size={15} /></span>
+          </div>
+        </>
       );
     }
 
     const inside = w > title.length * 7 + (t.assignee ? 40 : 18);
+    const vd = t.validation_days || 0;
     return (
+      <>
+      {lead}
+      {vd > 0 && (
+        <span className={"trail" + (t.done ? " done" : "")} style={{ left: x + w, width: vd * dayW, "--bc": style["--bc"] }}
+          title={`Validation client : ${vd} j (jusqu'au ${fmtShort(e + vd)})`}>
+          {vd * dayW > 70 && <i>validation</i>}
+        </span>
+      )}
       <div className={"bar" + (sel ? " sel" : "") + (t.done ? " done" : "") + (isPrev ? " dragging" : "")}
         style={{ left: x, width: w, ...style }} title={isPrev ? undefined : tip}
         onPointerDown={(ev) => startDrag(ev, { kind: "move", task: t })}>
+        {cutsOf(s, e)}
         <span className="grip l" onPointerDown={(ev) => startDrag(ev, { kind: "resize-l", task: t })} />
         {inside && (
           <span className="bar-in">
@@ -453,15 +513,16 @@ const Gantt = forwardRef(function Gantt(
         )}
         <span className="grip r" onPointerDown={(ev) => startDrag(ev, { kind: "resize-r", task: t })} />
         {!inside && (
-          <span className="bar-out">
+          <span className="bar-out" style={{ left: w + 6 + vd * dayW }}>
             {colorMode === "project" && <Avatars assignee={t.assignee} size={15} />}
             {t.done && "✓ "}{title}{t.note && <NoteIcon />}
           </span>
         )}
-        {isPrev && drag.moved && (
+        {isPrev && drag?.task?.id === t.id && drag.moved && (
           <span className="drag-tip">{fmtShort(s)} → {fmtShort(e)} · {e - s + 1} j</span>
         )}
       </div>
+      </>
     );
   };
 
@@ -495,6 +556,12 @@ const Gantt = forwardRef(function Gantt(
           <div className="g-sidefill" style={{ width: sidebarW }} />
           <div className="g-grid" style={{ left: sidebarW, ...gridStyle }} onPointerDown={onBgDown}>
             {offCols}
+            {cds.filter((c) => c.b >= range.start && c.a < end).map((c) => (
+              <div key={c.id} className="closure-col" style={{ left: xOfDay(c.a), width: (c.b - c.a + 1) * dayW }}
+                title={`${c.label || "Fermeture de l'agence"} : ${fmtShort(c.a)} → ${fmtShort(c.b)}`}>
+                {(c.b - c.a + 1) * dayW > 50 && <span>{c.label || "Fermeture"}</span>}
+              </div>
+            ))}
             {today >= range.start && today < end && <div className="today-line" style={{ left: xOfDay(today) + dayW / 2 }} />}
           </div>
 
@@ -506,12 +573,13 @@ const Gantt = forwardRef(function Gantt(
               const sel = selected?.type === "project" && selected.id === p.id;
               let span = null;
               if (its.length) {
-                const a = Math.min(...its.map((t) => toDay(t.start)));
-                const b = Math.max(...its.map((t) => toDay(t.end)));
+                const a = Math.min(...its.map((t) => datesOf(t).start - (t.done ? 0 : t.lead_days || 0)));
+                const b = Math.max(...its.map((t) => datesOf(t).end + (t.kind === "milestone" ? 0 : t.validation_days || 0)));
                 span = { a, b };
               }
+              const prospect = p.status === "prospect";
               return (
-                <div key={r.key} className="row row-project" style={{ top: r.y, height: ROW_H.project }}>
+                <div key={r.key} className={"row row-project" + (prospect ? " prospect" : "")} style={{ top: r.y, height: ROW_H.project }}>
                   <div className={"label label-project" + (sel ? " sel" : "")} style={{ width: sidebarW }}>
                     <button className="chev" onClick={() => onToggleCollapse(p.id)} aria-label={isCol ? "Déplier" : "Replier"}>
                       <svg width="12" height="12" viewBox="0 0 12 12" style={{ transform: isCol ? "rotate(-90deg)" : "none" }}><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -519,15 +587,27 @@ const Gantt = forwardRef(function Gantt(
                     <button className="pname" onClick={() => onSelect({ type: "project", id: p.id })} title="Modifier le projet">
                       <span className="pdot lg" style={{ background: p.color }} />
                       <span className="ptext">{p.name}</span>
+                      {prospect && <span className="tag prospect">prospect</span>}
                       {p.archived && <span className="tag">archivé</span>}
+                    </button>
+                    <span className="porder">
+                      <button onClick={() => onMoveProject?.(p.id, -1)} title="Monter le projet" aria-label="Monter">▲</button>
+                      <button onClick={() => onMoveProject?.(p.id, 1)} title="Descendre le projet" aria-label="Descendre">▼</button>
+                    </span>
+                    <button className="padd pview" onClick={() => onOpenProject?.(p.id)} title="Vue détail du projet" aria-label="Vue détail">
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M8.5 1.5h4v4M12.5 1.5 7.5 6.5M5.5 2.5h-3v9h9v-3" /></svg>
                     </button>
                     <span className="pcount">{its.length}</span>
                     <button className="padd" onClick={() => onQuickAdd(p.id)} title="Ajouter une tâche">+</button>
                   </div>
                   {span && (
-                    <div className="summary" onPointerDown={onBgDown}
+                    <div className="summary" onPointerDown={(ev) => { if (ev.pointerType === "touch") return; startDrag(ev, { kind: "move-project", project: p }); }}
                       style={{ left: sidebarW + xOfDay(span.a), width: (span.b - span.a + 1) * dayW, "--pc": p.color }}
-                      title={`${p.name} : ${fmtShort(span.a)} → ${fmtShort(span.b)}`} />
+                      title={`${p.name} : ${fmtShort(span.a)} → ${fmtShort(span.b)}\nGlisser pour décaler tout le projet`}>
+                      {drag?.kind === "move-project" && drag.project.id === p.id && drag.moved && (
+                        <span className="drag-tip">{drag.delta > 0 ? "+" : ""}{drag.delta} j</span>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -537,7 +617,7 @@ const Gantt = forwardRef(function Gantt(
               const sel = selected?.type === "task" && selected.id === t.id;
               const isDragged = drag?.kind === "reorder" && drag.task.id === t.id && drag.moved;
               return (
-                <div key={r.key} className={"row row-task" + (isDragged ? " ghosted" : "") + (sel ? " row-sel" : "")} style={{ top: r.y, height: ROW_H.task }}>
+                <div key={r.key} className={"row row-task" + (isDragged ? " ghosted" : "") + (sel ? " row-sel" : "") + (r.project.status === "prospect" ? " prospect" : "")} style={{ top: r.y, height: ROW_H.task }}>
                   <div className={"label label-task" + (sel ? " sel" : "")} style={{ width: sidebarW }}
                     onClick={() => { onSelect({ type: "task", id: t.id }); revealDay(toDay(t.start)); }}>
                     <span className="handle" title="Glisser pour réordonner"
@@ -545,6 +625,7 @@ const Gantt = forwardRef(function Gantt(
                       <svg width="8" height="14" viewBox="0 0 8 14"><g fill="currentColor">{[2, 7, 12].map((cy) => <React.Fragment key={cy}><circle cx="2" cy={cy} r="1.2" /><circle cx="6" cy={cy} r="1.2" /></React.Fragment>)}</g></svg>
                     </span>
                     {t.kind === "milestone" && <span className="ms-mini" style={{ background: r.project.color }} />}
+                    {t.after_id && <span className="link-ico" title="Suit une autre tâche (se décale avec elle)">↳</span>}
                     <span className={"ttext" + (t.title ? "" : " empty") + (t.done ? " done" : "")}>{t.title || "Sans titre"}</span>
                     <Avatars assignee={t.assignee} size={17} />
                   </div>
@@ -574,12 +655,47 @@ const Gantt = forwardRef(function Gantt(
             );
           })}
 
+          <Links rows={rows.list} datesOf={datesOf} xOfDay={xOfDay} dayW={dayW} left={sidebarW} width={width} height={rows.height} />
+
           {reorderLine != null && <div className="reorder-line" style={{ top: reorderLine - 1, width: sidebarW + width }} />}
         </div>
       </div>
     </div>
   );
 });
+
+// Flèches des liens « B suit A » : de la fin (validation comprise) de A au début de B.
+function Links({ rows, datesOf, xOfDay, dayW, left, width, height }) {
+  const pos = new Map();
+  for (const r of rows) if (r.type === "task") pos.set(r.task.id, { r, y: r.y + ROW_H.task / 2 });
+  const paths = [];
+  for (const [id, { r, y }] of pos) {
+    const t = r.task;
+    const from = t.after_id && pos.get(t.after_id);
+    if (!from) continue;
+    const pt = from.r.task;
+    const pe = datesOf(pt).end + 1 + (pt.kind === "milestone" ? 0 : pt.validation_days || 0);
+    const x1 = pt.kind === "milestone" ? xOfDay(datesOf(pt).start) + dayW / 2 + 9 : xOfDay(pe);
+    const x2 = t.kind === "milestone" ? xOfDay(datesOf(t).start) + dayW / 2 - 9 : xOfDay(datesOf(t).start);
+    const y1 = from.y, y2 = y;
+    const mx = Math.max(x1 + 8, Math.min(x2 - 8, x1 + 14));
+    const d = x2 - 6 >= x1 + 8
+      ? `M${x1},${y1} H${mx} V${y2} H${x2 - 2}`
+      : `M${x1},${y1} h8 V${(y1 + y2) / 2} H${x2 - 14} V${y2} H${x2 - 2}`;
+    paths.push(<path key={id} d={d} />);
+  }
+  if (!paths.length) return null;
+  return (
+    <svg className="links" style={{ left, width, height }} width={width} height={height}>
+      <defs>
+        <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="currentColor" />
+        </marker>
+      </defs>
+      <g markerEnd="url(#arrow)">{paths}</g>
+    </svg>
+  );
+}
 
 function NoteIcon() {
   return (

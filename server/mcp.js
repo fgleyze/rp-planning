@@ -36,7 +36,10 @@ function line(t, today) {
     ? fr(t.start)
     : `${fr(t.start)} → ${fr(t.end)}`;
   const kind = t.kind === "milestone" ? "◆ jalon" : "tâche";
-  let s = `- [${kind}] ${t.title || "(sans titre)"} — ${when} — ${WHO[t.assignee] ?? t.assignee} — ${status(t, today)}`;
+  let s = `- [${kind}] ${t.title || "(sans titre)"} — ${when}${t.time ? " à " + t.time : ""} — ${WHO[t.assignee] ?? t.assignee} — ${status(t, today)}`;
+  if (t.validation_days && t.kind !== "milestone") s += ` — puis ${t.validation_days} j de validation client`;
+  if (t.lead_days && !t.done) s += ` — à caler (${t.lead_days} j avant)`;
+  if (t.after_id && t._pred) s += ` — suit « ${t._pred} »`;
   if (t.note) s += `\n    note : ${t.note.replace(/\n/g, "\n    ")}`;
   return s;
 }
@@ -70,10 +73,16 @@ const TOOLS = [
       if (!list.length) return projet ? `Aucun projet ne correspond à « ${projet} ».` : "Aucun projet.";
       const out = [`Aujourd'hui : ${fr(today)}.`, ""];
       for (const p of list) {
+        const byId = new Map(tasks.map((t) => [t.id, t]));
         const ts = tasks
           .filter((t) => t.project_id === p.id && (inclure_terminees || !t.done))
+          .map((t) => ({ ...t, _pred: byId.get(t.after_id)?.title }))
           .sort((a, b) => a.start.localeCompare(b.start));
-        out.push(`## ${p.name}${p.archived ? " (archivé)" : ""}`);
+        out.push(`## ${p.name}${p.archived ? " (archivé)" : ""}${p.status === "prospect" ? " — PROSPECT (non signé)" : ""}`);
+        if (p.status === "prospect") {
+          out.push(`Proposition envoyée le ${p.proposal_date ? fr(p.proposal_date) : "?"} ; relancer le ${p.followup_date ? fr(p.followup_date) : "(pas de date)"}`);
+        }
+        if (p.note) out.push(`Note : ${p.note}`);
         if (ts.length) {
           out.push(`Période : ${fr(ts[0].start)} → ${fr(ts.reduce((m, t) => (t.end > m ? t.end : m), ts[0].end))}`);
           out.push(...ts.map((t) => line(t, today)));
@@ -109,8 +118,17 @@ const TOOLS = [
         .sort((a, b) => a.start.localeCompare(b.start))
         .map((t) => `${line(t, today)} — projet : ${proj.get(t.project_id).name}`);
       const who = personne ? ` pour ${WHO[personne]}` : "";
+      const relances = projects
+        .filter((p) => !p.archived && p.status === "prospect" && p.followup_date && p.followup_date <= horizon)
+        .sort((a, b) => a.followup_date.localeCompare(b.followup_date))
+        .map((p) => `- ${p.name} : relancer le ${fr(p.followup_date)}${p.followup_date <= today ? " (à faire !)" : ""}${p.note ? " — " + p.note : ""}`);
+      const { closures = [] } = store.getState();
+      const fermetures = closures.filter((c) => c.end >= today && c.start <= horizon)
+        .map((c) => `- ${c.label || "Fermeture"} : du ${fr(c.start)} au ${fr(c.end)}`);
       return [
         `Aujourd'hui : ${fr(today)}. Horizon : jusqu'au ${fr(horizon)}${who}.`,
+        ...(relances.length ? ["", "## Relances prospects", ...relances] : []),
+        ...(fermetures.length ? ["", "## Fermetures de l'agence", ...fermetures] : []),
         "", "## En retard", ...(late.length ? fmt(late) : ["(rien)"]),
         "", "## En cours", ...(now.length ? fmt(now) : ["(rien)"]),
         "", "## À venir", ...(next.length ? fmt(next) : ["(rien)"]),
@@ -168,7 +186,7 @@ function handleMessage(msg) {
         capabilities: { tools: {} },
         serverInfo: { name: "rp-planning", title: "R&P Planning", version: "1.0.0" },
         instructions:
-          "Planning partagé de l'agence d'architecture Racines & Perspectives (François et Guillaume). Lecture seule. Utilise planning_a_venir pour « qu'est-ce qui arrive », planning_projets pour le détail d'un projet, planning_charge pour la charge par semaine.",
+          "Planning partagé de l'agence d'architecture Racines & Perspectives (François et Guillaume), prospects non signés compris. Lecture seule. Utilise planning_a_venir pour « qu'est-ce qui arrive », planning_projets pour le détail d'un projet, planning_charge pour la charge par semaine.",
       });
     case "ping":
       return ok({});

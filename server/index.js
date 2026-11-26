@@ -79,6 +79,12 @@ app.delete("/api/projects/:id", handle((req) => store.deleteProject(req.params.i
 app.post("/api/tasks", handle((req) => store.createTask(req.body || {})));
 app.patch("/api/tasks/:id", handle((req) => store.updateTask(req.params.id, req.body || {})));
 app.delete("/api/tasks/:id", handle((req) => store.deleteTask(req.params.id)));
+app.post("/api/tasks/batch", handle((req) => store.updateTasks(req.body?.updates)));
+
+// ── Fermetures (vacances de l'agence) ────────────────────────────────────
+app.post("/api/closures", handle((req) => store.createClosure(req.body || {})));
+app.patch("/api/closures/:id", handle((req) => store.updateClosure(req.params.id, req.body || {})));
+app.delete("/api/closures/:id", handle((req) => store.deleteClosure(req.params.id)));
 
 app.use("/api", (req, res) => res.status(404).json({ error: "Route inconnue." }));
 

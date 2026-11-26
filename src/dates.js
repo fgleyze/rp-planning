@@ -71,9 +71,10 @@ function holidaysOf(y) {
 export const holiday = (day) => holidaysOf(parts(day).y).get(day) || null;
 export const isOff = (day) => isWeekend(day) || !!holiday(day);
 
-// Jours ouvrés entre deux jours inclus.
-export function workingDays(a, b) {
+// Jours ouvrés entre deux jours inclus (hors fermetures de l'agence si
+// `cds` = [{ a, b }] est fourni).
+export function workingDays(a, b, cds = []) {
   let n = 0;
-  for (let d = a; d <= b; d++) if (!isOff(d)) n++;
+  for (let d = a; d <= b; d++) if (!isOff(d) && !cds.some((c) => d >= c.a && d <= c.b)) n++;
   return n;
 }

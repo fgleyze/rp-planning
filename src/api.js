@@ -50,4 +50,8 @@ export const api = {
   createTask: (t) => req("POST", "/api/tasks", t),
   updateTask: (id, patch) => req("PATCH", `/api/tasks/${id}`, patch),
   deleteTask: (id) => req("DELETE", `/api/tasks/${id}`),
+  updateTasks: (updates) => req("POST", "/api/tasks/batch", { updates }),
+  createClosure: (c) => req("POST", "/api/closures", c),
+  updateClosure: (id, patch) => req("PATCH", `/api/closures/${id}`, patch),
+  deleteClosure: (id) => req("DELETE", `/api/closures/${id}`),
 };
