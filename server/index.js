@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import * as store from "./db.js";
 import { mountMcp } from "./mcp.js";
+import { mountOAuth } from "./oauth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -91,9 +92,10 @@ app.use("/api", (req, res) => res.status(404).json({ error: "Route inconnue." })
 // ── Connecteur MCP pour Claude (lecture seule, voir server/mcp.js) ─────────
 mountMcp(app);
 
-// Pas d'OAuth ici : les adresses de découverte OAuth doivent répondre un vrai
-// 404, sinon la page de l'appli (200 HTML) fait croire à Claude qu'il faut
-// s'enregistrer, et l'ajout du connecteur échoue.
+// OAuth minimal, approuvé automatiquement, exigé par le bouton « Connecter »
+// de claude.ai (voir server/oauth.js). Tout le reste de /.well-known, /mcp…
+// répond un vrai 404 (et non la page HTML de l'appli).
+mountOAuth(app);
 const notFound = (req, res) => res.status(404).json({ error: "Introuvable." });
 app.all(/^\/\.well-known(\/|$)/, notFound);
 app.all(["/register", "/authorize", "/token", "/oauth", "/oauth/*", "/mcp", "/mcp/*"], notFound);
