@@ -91,6 +91,13 @@ app.use("/api", (req, res) => res.status(404).json({ error: "Route inconnue." })
 // ── Connecteur MCP pour Claude (lecture seule, voir server/mcp.js) ─────────
 mountMcp(app);
 
+// Pas d'OAuth ici : les adresses de découverte OAuth doivent répondre un vrai
+// 404, sinon la page de l'appli (200 HTML) fait croire à Claude qu'il faut
+// s'enregistrer, et l'ajout du connecteur échoue.
+const notFound = (req, res) => res.status(404).json({ error: "Introuvable." });
+app.all(/^\/\.well-known(\/|$)/, notFound);
+app.all(["/register", "/authorize", "/token", "/oauth", "/oauth/*", "/mcp", "/mcp/*"], notFound);
+
 // ── Front (prod) ─────────────────────────────────────────────────────────
 if (PROD) {
   const dist = path.join(ROOT, "dist");
